@@ -1,0 +1,138 @@
+STEP 1 Download Mosquitto (Windows)
+Open browser
+Go to:  https://mosquitto.org/download/
+
+Under Windows, download:
+“mosquitto-x.y.z-install-windows-x64.exe”
+
+Download the installer (.exe), not zip.
+
+STEP 2 Install Mosquitto (IMPORTANT OPTIONS)
+
+Double-click the downloaded .exe
+
+Click Next
+
+Accept license → Next
+
+When asked Components, make sure ALL are checked:
+
+☑ Mosquitto Broker ☑ Mosquitto Clients  ☑ Service
+
+Click Next
+
+Install location:
+DO NOT CHANGE (keep default)
+
+Click Install
+Finish installation
+
+STEP 3 Verify Installation Folder
+
+Go to:
+
+C:\Program Files\mosquitto\
+
+
+You MUST see files like:
+
+mosquitto.exe
+mosquitto_sub.exe
+mosquitto_pub.exe
+mosquitto.conf
+
+
+If not → installation failed.
+
+STEP 4 Open Command Prompt (IMPORTANT)
+Press Windows + R
+Type: cmd
+Press Enter
+
+STEP 5 Go to Mosquitto Directory
+In Command Prompt, type:  cd "C:\Program Files\mosquitto"
+Press Enter
+
+STEP 6 Start MQTT Broker (PORT 1883)
+Type exactly this:  mosquitto -v
+Press Enter
+Correct Output
+
+You should see:
+
+Opening ipv4 listen socket on port 1883.
+Opening ipv6 listen socket on port 1883.
+mosquitto version x.x.x running
+
+
+DO NOT CLOSE THIS WINDOW
+This terminal = MQTT Broker running
+
+STEP 7 Allow Firewall Access (VERY IMPORTANT)
+
+When Windows Firewall popup appears:
+
+=> Check Private networks
+=> Check Public networks
+Click Allow access
+
+If you skip this → ESP32 will NOT connect.
+
+STEP 8 Find Your Windows IP Address
+Open NEW Command Prompt window.
+
+Type: ipconfig
+Look for:
+
+IPv4 Address . . . . . : 192.168.x.xxx
+
+THIS is your MQTT broker IP
+Example:
+
+192.168.1.100
+
+Use this IP in ESP32 code:
+
+const char* MQTT_BROKER = "192.168.1.100";
+
+STEP 9 Test Broker (VERY IMPORTANT)
+Terminal 1 (Subscriber)
+
+Open new CMD, type: cd "C:\Program Files\mosquitto" mosquitto_sub -h localhost -t test/topic
+
+Leave it open.
+
+Terminal 2 (Publisher)
+Open another CMD, type:  cd "C:\Program Files\mosquitto" mosquitto_pub -h localhost -t test/topic -m hello
+
+Expected Result
+
+In Subscriber terminal, you must see:
+
+hello
+
+
+If yes => MQTT broker is working perfectly.
+
+STEP 10 Test with ESP32
+
+In ESP32 code:
+
+const char* MQTT_BROKER = "YOUR_WINDOWS_IP";
+const int MQTT_PORT = 1883;
+
+
+Upload code => open Serial Monitor.
+
+You should see:
+
+Connecting to MQTT...connected
+
+MISTAKES (AVOID THESE)
+1.Forgetting firewall permission
+2.Closing broker terminal
+3.Using localhost instead of Windows IP in ESP32
+4.ESP32 and laptop on different Wi-Fi
+5.Changing Mosquitto install path
+
+
