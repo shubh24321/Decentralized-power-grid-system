@@ -1,0 +1,82 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+const char* WIFI_SSID = "Shubham";
+const char* WIFI_PASSWORD = "Sham@123@#";
+const char* MQTT_BROKER = "10.68.13.83";
+const int MQTT_PORT = 1883;
+
+const char* TOPIC_STATUS  = "grid/status";
+const char* TOPIC_OFFER   = "grid/offer";
+const char* TOPIC_REQUEST = "grid/request";
+const char* TOPIC_ACCEPT  = "grid/accept";
+
+String nodeId = "SOLAR-01";
+
+#define SOLAR_VOLTAGE_PIN 34
+#define CLOUD_BUTTON      15
+#define SOLAR_LED         2
+
+int solarCapacity = 0;
+int batteryCapacity = 0;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+void setupWiFi() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+}
+
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String msg;
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+
+  if (String(topic) == TOPIC_STATUS && msg.indexOf("BATTERY-02:capacity:") >= 0) {
+    batteryCapacity = msg.substring(msg.lastIndexOf(':') + 1).toInt();
+  }
+
+  if (String(topic) == TOPIC_REQUEST && msg.indexOf("HOUSE-03") >= 0) {
+    int demand = msg.substring(msg.lastIndexOf(':') + 1).toInt();
+    int total = solarCapacity + batteryCapacity;
+    if (total == 0) return;
+
+    int share = (solarCapacity * demand) / total;
+    share = min(share, solarCapacity);
+
+    if (share > 0) {
+      client.publish(TOPIC_OFFER, (nodeId + ":" + String(share)).c_str());
+    }
+  }
+}
+
+float readSolarVoltage() {
+  return (analogRead(SOLAR_VOLTAGE_PIN) / 4095.0) * 6.6;
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(SOLAR_LED, OUTPUT);
+  pinMode(CLOUD_BUTTON, INPUT);
+
+  setupWiFi();
+  client.setServer(MQTT_BROKER, MQTT_PORT);
+  client.setCallback(mqttCallback);
+}
+
+void loop() {
+  if (!client.connected()) {
+    while (!client.connect(nodeId.c_str())) delay(1000);
+    client.subscribe(TOPIC_REQUEST);
+    client.subscribe(TOPIC_STATUS);
+  }
+  client.loop();
+
+  solarCapacity = map(readSolarVoltage() * 100, 100, 600, 0, 100);
+  solarCapacity = constrain(solarCapacity, 0, 100);
+
+  client.publish(TOPIC_STATUS, (nodeId + ":capacity:" + String(solarCapacity)).c_str());
+  digitalWrite(SOLAR_LED, solarCapacity > 0);
+
+  delay(1000);
+}
