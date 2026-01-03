@@ -1,0 +1,138 @@
+STEP 1 Install Homebrew 
+
+Open Terminal and run:
+brew --version
+
+If Homebrew is NOT installed
+Run this command (copy exactly):
+
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+Wait until installation finishes.
+
+STEP 2 Install Mosquitto
+In Terminal:
+
+brew install mosquitto
+
+Wait until it completes.
+
+STEP 3 Verify Mosquitto Installation
+Run:
+
+mosquitto -h
+
+If you see help text => Mosquitto is installed correctly.
+
+STEP 4 Create Mosquitto Configuration File (IMPORTANT)
+
+1. Create a config file
+Run:
+
+nano ~/mosquitto.conf
+
+2. Paste EXACTLY this inside the file
+
+listener 1883
+allow_anonymous true
+
+Do NOT add anything else.
+
+3. Save and exit nano
+
+Press CTRL + O => Enter
+
+Press CTRL + X
+
+STEP 5 Start MQTT Broker Using Config File
+Run this command:
+
+mosquitto -c ~/mosquitto.conf -v
+
+Correct Output
+
+You MUST see something like:
+
+Opening ipv4 listen socket on port 1883.
+Opening ipv6 listen socket on port 1883.
+mosquitto version X.X.X running
+
+DO NOT CLOSE THIS TERMINAL
+This terminal = MQTT Broker running
+
+STEP 6 Allow macOS Firewall (VERY IMPORTANT)
+If macOS shows a popup:
+
+=> Click Allow
+=> Allow incoming connections for Mosquitto
+
+If you miss this => ESP32 will NOT connect.
+
+STEP 7 Find Your MacBook IP Address
+Open new Terminal window, run:
+
+ifconfig
+
+Look for en0 (Wi-Fi), then find:
+
+inet 192.168.x.xxx
+
+Example:
+
+inet 192.168.1.45
+
+Use THIS IP in ESP32 code:
+
+const char* MQTT_BROKER = "192.168.1.45";
+const int MQTT_PORT = 1883;
+
+STEP 8 Test Broker Locally 
+Terminal 1 (Subscriber)
+mosquitto_sub -h localhost -t test/topic
+
+Leave it open.
+
+Terminal 2 (Publisher)
+mosquitto_pub -h localhost -t test/topic -m hello
+
+Expected Result
+
+Subscriber terminal prints:
+
+hello
+
+If yes => broker is working perfectly.
+
+STEP 9 Test Broker from ESP32
+
+In ESP32 code:
+
+const char* MQTT_BROKER = "MACBOOK_IP";
+const int MQTT_PORT = 1883;
+
+Upload code => open Serial Monitor.
+
+You should see:
+
+Connecting to MQTT...connected
+
+STEP 10 (Optional) Auto-start Broker at Boot
+If you want Mosquitto to auto-start:
+
+brew services start mosquitto
+
+To stop auto-start:
+
+brew services stop mosquitto
+
+COMMON MISTAKES (DO NOT DO THESE)
+
+1.Running broker without -c mosquitto.conf
+2.Forgetting allow_anonymous true
+3.Using localhost in ESP32 code
+4.ESP32 and MacBook on different Wi-Fi
+5.Closing broker terminal
+
+
+
+
