@@ -1,0 +1,276 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+
+/* ================= WIFI & MQTT ================= */
+const char* WIFI_SSID     = "SSID(Wifi name)";
+const char* WIFI_PASSWORD = "password";
+const char* MQTT_BROKER   = "IP Address of Broker";// if your broker is running on other device, then make sure to connect on same network where you all ESP 32 is connected, in my case, I am using my mobile hotspot for network and my laptop has MQTT broker
+const int   MQTT_PORT     = port;
+
+const char* TOPIC_STATUS  = "grid/status";
+const char* TOPIC_OFFER   = "grid/offer";
+const char* TOPIC_REQUEST = "grid/request";
+const char* TOPIC_ACCEPT  = "grid/accept";
+
+/* ================= NODE ================= */
+String nodeId = "HOUSE-03";
+
+/* ================= HARDWARE ================= */
+#define DEMAND_PIN  32 // Connect potentiometer 
+#define POWER_LED   25
+
+/* ================= OLED (SPI) ================= */
+#define SCREEN_WIDTH  128
+#define SCREEN_HEIGHT 64
+
+#define OLED_CLK   18   // D0
+#define OLED_MOSI  23   // D1
+#define OLED_DC    4
+#define OLED_CS    5
+#define OLED_RST   15
+
+Adafruit_SSD1306 display(
+  SCREEN_WIDTH,
+  SCREEN_HEIGHT,
+  &SPI,
+  OLED_DC,
+  OLED_RST,
+  OLED_CS
+);
+
+/* ================= STATE ================= */
+int currentDemand = 0;
+
+int solarCapacity   = 0;
+int batteryCapacity = 0;
+
+int solarContribution   = 0;
+int batteryContribution = 0;
+
+bool rebalanceNeeded = false;
+
+/* ================= TIMERS ================= */
+unsigned long lastRequestTime = 0;
+unsigned long lastDisplayTime = 0;
+
+const unsigned long REQUEST_INTERVAL = 2000;
+const unsigned long DISPLAY_INTERVAL = 2000;
+
+/* ================= MQTT ================= */
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+/* ================= WIFI ================= */
+void setupWiFi() {
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected!");
+}
+
+/* ================= MQTT CALLBACK ================= */
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (int i = 0; i < length; i++) message += (char)payload[i];
+
+  /* ---- Capacity updates ---- */
+  if (String(topic) == TOPIC_STATUS) {
+
+    if (message.indexOf("SOLAR-01:capacity:") >= 0) {
+      solarCapacity = message.substring(message.lastIndexOf(':') + 1).toInt();
+      rebalanceNeeded = true;
+    }
+
+    if (message.indexOf("BATTERY-02:capacity:") >= 0) {
+      batteryCapacity = message.substring(message.lastIndexOf(':') + 1).toInt();
+      rebalanceNeeded = true;
+    }
+  }
+
+  /* ---- Offers (used only if not rebalancing) ---- */
+  else if (String(topic) == TOPIC_OFFER && !rebalanceNeeded) {
+
+    int idx = message.indexOf(':');
+    if (idx < 0) return;
+
+    String sender = message.substring(0, idx);
+    int offered = message.substring(idx + 1).toInt();
+
+    int received = solarContribution + batteryContribution;
+    int needed = currentDemand - received;
+
+    if (needed <= 0 || offered <= 0) return;
+
+    int accept = min(needed, offered);
+
+    String acceptMsg = nodeId + ":accept:" + String(accept) + ":from:" + sender;
+    client.publish(TOPIC_ACCEPT, acceptMsg.c_str());
+
+    if (sender == "SOLAR-01")        solarContribution   += accept;
+    else if (sender == "BATTERY-02") batteryContribution += accept;
+  }
+}
+
+/* ================= MQTT CONNECT ================= */
+void reconnectMQTT() {
+  while (!client.connected()) {
+    Serial.print("Connecting to MQTT...");
+    if (client.connect(nodeId.c_str())) {
+      Serial.println("connected");
+      client.subscribe(TOPIC_STATUS);
+      client.subscribe(TOPIC_OFFER);
+      client.publish(TOPIC_STATUS, (nodeId + ":online").c_str());
+    } else {
+      delay(3000);
+    }
+  }
+}
+
+/* ================= OLED DISPLAY ================= */
+void updateOLED() {
+  display.clearDisplay();
+
+  int total = solarContribution + batteryContribution;
+
+  display.setCursor(0, 0);
+  display.print("Demand: ");
+  display.println(currentDemand);
+
+  display.print("Recv:   ");
+  display.println(total);
+
+  display.print("Solar: ");
+  display.print(solarContribution);
+  display.print("/");
+  display.println(solarCapacity);
+
+  display.print("Batt:  ");
+  display.print(batteryContribution);
+  display.print("/");
+  display.println(batteryCapacity);
+
+  display.println();
+
+  if (currentDemand == 0)
+    display.println("IDLE");
+  else if (total >= currentDemand)
+    display.println("FULLY POWERED");
+  else if (total > 0)
+    display.println("PARTIAL");
+  else
+    display.println("NO POWER");
+
+  display.display();
+}
+
+/* ================= SERIAL DISPLAY ================= */
+void updateSerial() {
+  int total = solarContribution + batteryContribution;
+
+  Serial.print("HOUSE: Demand=");
+  Serial.print(currentDemand);
+  Serial.print(", Received=");
+  Serial.print(total);
+  Serial.print(" (Solar: ");
+  Serial.print(solarContribution);
+  Serial.print("/");
+  Serial.print(solarCapacity);
+  Serial.print(", Battery: ");
+  Serial.print(batteryContribution);
+  Serial.print("/");
+  Serial.print(batteryCapacity);
+  Serial.print(") ");
+
+  if (currentDemand == 0) Serial.println("IDLE");
+  else if (total >= currentDemand) Serial.println("FULLY POWERED");
+  else if (total > 0) Serial.println("PARTIAL");
+  else Serial.println("NO POWER");
+}
+
+/* ================= SETUP ================= */
+void setup() {
+  Serial.begin(115200);
+  Serial.println("=== SMART CONSUMER WITH OLED ===");
+
+  pinMode(POWER_LED, OUTPUT);
+  digitalWrite(POWER_LED, LOW);
+
+  setupWiFi();
+
+  client.setServer(MQTT_BROKER, MQTT_PORT);
+  client.setCallback(mqttCallback);
+
+  if (!display.begin(SSD1306_SWITCHCAPVCC)) {
+    Serial.println("OLED failed");
+    while (true);
+  }
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("SMART CONSUMER");
+  display.display();
+  delay(1000);
+}
+
+/* ================= LOOP ================= */
+void loop() {
+  if (!client.connected()) reconnectMQTT();
+  client.loop();
+
+  /* ---- Read demand ---- */
+  int rawADC = analogRead(DEMAND_PIN);
+  int newDemand = map(rawADC, 0, 4095, 0, 100);
+
+  static int lastDemand = -1;
+
+  if (abs(newDemand - lastDemand) > 2) {
+    currentDemand = newDemand;
+    solarContribution = 0;
+    batteryContribution = 0;
+    rebalanceNeeded = true;
+    lastDemand = newDemand;
+  }
+
+  /* ---- PROPORTIONAL REBALANCE ---- */
+  if (rebalanceNeeded && currentDemand > 0) {
+    int totalCapacity = solarCapacity + batteryCapacity;
+    if (totalCapacity > 0) {
+      solarContribution =
+        (solarCapacity * currentDemand) / totalCapacity;
+      batteryContribution =
+        (batteryCapacity * currentDemand) / totalCapacity;
+
+      solarContribution   = min(solarContribution, solarCapacity);
+      batteryContribution = min(batteryContribution, batteryCapacity);
+    }
+    rebalanceNeeded = false;
+  }
+
+  /* ---- Request if still short ---- */
+  int received = solarContribution + batteryContribution;
+
+  if (currentDemand > 0 && received < currentDemand) {
+    if (millis() - lastRequestTime > REQUEST_INTERVAL) {
+      String req = nodeId + ":request:" + String(currentDemand);
+      client.publish(TOPIC_REQUEST, req.c_str());
+      lastRequestTime = millis();
+    }
+  }
+
+  /* ---- Slow display update ---- */
+  if (millis() - lastDisplayTime > DISPLAY_INTERVAL) {
+    updateSerial();
+    updateOLED();
+    lastDisplayTime = millis();
+  }
+
+  delay(100);
+}
