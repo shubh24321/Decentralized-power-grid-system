@@ -1,0 +1,146 @@
+#include <WiFi.h>
+#include <PubSubClient.h>
+
+const char* WIFI_SSID = "Shubham";
+const char* WIFI_PASSWORD = "Sham@123@#";
+
+const char* MQTT_BROKER = "10.68.13.83";
+const int MQTT_PORT = 1883;
+
+const char* TOPIC_STATUS  = "grid/status";
+const char* TOPIC_OFFER   = "grid/offer";
+const char* TOPIC_REQUEST = "grid/request";
+const char* TOPIC_ACCEPT  = "grid/accept";
+
+String nodeId = "BATTERY-02";
+
+#define BATTERY_PIN 35   // Potentiometer / ADC input (generator capacity)
+
+int batteryCapacity = 0;
+int solarCapacity = 0;   // Used for proportional sharing
+
+unsigned long lastOfferTime = 0;
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+/* ================= WIFI ================= */
+void setupWiFi() {
+  Serial.println("Connecting to WiFi...");
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("WiFi Connected!");
+}
+
+/* ================= MQTT CALLBACK ================= */
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (int i = 0; i < length; i++) message += (char)payload[i];
+
+  // Listen to solar capacity
+  if (String(topic) == TOPIC_STATUS) {
+    if (message.indexOf("SOLAR-01:capacity:") >= 0) {
+      int colonIndex = message.lastIndexOf(':');
+      if (colonIndex > 0) {
+        solarCapacity = message.substring(colonIndex + 1).toInt();
+      }
+    }
+  }
+
+  // Handle house requests
+  else if (String(topic) == TOPIC_REQUEST) {
+    if (message.indexOf("HOUSE-03") >= 0) {
+
+      // Prevent rapid multiple offers
+      if (millis() - lastOfferTime < 2000) return;
+
+      int colonIndex = message.lastIndexOf(':');
+      if (colonIndex > 0) {
+        int houseDemand = message.substring(colonIndex + 1).toInt();
+
+        if (batteryCapacity > 0) {
+
+          int totalCapacity = solarCapacity + batteryCapacity;
+          int batteryShare = 0;
+
+          if (totalCapacity > 0) {
+            batteryShare =
+              (batteryCapacity * houseDemand) / totalCapacity;
+            batteryShare = min(batteryShare, batteryCapacity);
+          } else {
+            // If solar is 0 (night), generator supplies what it can
+            batteryShare = min(houseDemand, batteryCapacity);
+          }
+
+          if (batteryShare > 0) {
+            String offer = nodeId + ":" + String(batteryShare);
+            client.publish(TOPIC_OFFER, offer.c_str());
+
+            lastOfferTime = millis();
+
+            Serial.print("GENERATOR offering: ");
+            Serial.print(batteryShare);
+            Serial.print(" of ");
+            Serial.print(batteryCapacity);
+            Serial.print(" (Solar capacity: ");
+            Serial.print(solarCapacity);
+            Serial.println(")");
+          }
+        }
+      }
+    }
+  }
+}
+
+/* ================= MQTT CONNECT ================= */
+void reconnectMQTT() {
+  while (!client.connected()) {
+    Serial.print("MQTT...");
+    if (client.connect(nodeId.c_str())) {
+      Serial.println("connected");
+      client.subscribe(TOPIC_REQUEST);
+      client.subscribe(TOPIC_ACCEPT);
+      client.subscribe(TOPIC_STATUS);
+      client.publish(TOPIC_STATUS, (nodeId + ":online").c_str());
+    } else {
+      delay(5000);
+    }
+  }
+}
+
+/* ================= SETUP ================= */
+void setup() {
+  Serial.begin(115200);
+  Serial.println("=== GENERATOR NODE (BATTERY) ===");
+
+  setupWiFi();
+  client.setServer(MQTT_BROKER, MQTT_PORT);
+  client.setCallback(mqttCallback);
+}
+
+/* ================= LOOP ================= */
+void loop() {
+  if (!client.connected()) reconnectMQTT();
+  client.loop();
+
+  // Generator capacity control (potentiometer)
+  int rawADC = analogRead(BATTERY_PIN);
+  int newCapacity = map(rawADC, 0, 4095, 0, 100);
+
+  static int lastCapacity = 0;
+  if (abs(newCapacity - lastCapacity) > 2) {
+    batteryCapacity = newCapacity;
+    String status = nodeId + ":capacity:" + String(batteryCapacity);
+    client.publish(TOPIC_STATUS, status.c_str());
+
+    Serial.print("GENERATOR capacity updated: ");
+    Serial.println(batteryCapacity);
+
+    lastCapacity = batteryCapacity;
+  }
+
+  delay(100);
+}
